@@ -16,19 +16,20 @@ pub fn main(init: std.process.Init) !void {
 fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io) !void {
     defer server_stream.close(io);
 
-    while (true) {
-        var server_read_buffer: [4000]u8 = undefined;
-        var server_client_response_buffer: [1][]u8 = .{server_read_buffer[0..]};
-        var server_write_buffer: [4000]u8 = undefined;
+    var server_read_buffer: [4000]u8 = undefined;
+    var server_client_response_buffer: [1][]u8 = .{server_read_buffer[0..]};
+    var server_write_buffer: [4000]u8 = undefined;
 
-        var stream_reader_inst = server_stream.reader(io, &server_read_buffer);
-        const server_reader = &stream_reader_inst.interface;
+    var stream_writer_inst = server_stream.writer(io, &server_write_buffer);
+    const server_writer = &stream_writer_inst.interface;
+
+    var stream_reader_inst = server_stream.reader(io, &server_read_buffer);
+    const server_reader = &stream_reader_inst.interface;
+
+    while (true) {
         const client_input_size = server_reader.readVec(&server_client_response_buffer) catch {
             break;
         };
-
-        var stream_writer_inst = server_stream.writer(io, &server_write_buffer);
-        const server_writer = &stream_writer_inst.interface;
 
         if (client_input_size > 0) {
             try server_writer.print("{s}", .{server_read_buffer[0..client_input_size]});
