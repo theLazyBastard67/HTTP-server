@@ -13,33 +13,37 @@ pub fn main(init: std.process.Init) !void {
     try server(init.io);
 }
 
-fn server(io: std.Io) !void {
+fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io) !void {
+    defer server_stream.close(io);
     var server_read_buffer: [4000]u8 = undefined;
     var server_client_response_buffer: [1][]u8 = .{server_read_buffer[0..]};
     var server_write_buffer: [4000]u8 = undefined;
 
-    const IpAddress = std.Io.net.IpAddress;
-    const server_address = try IpAddress.parse("127.0.0.1", 8070);
+    var stream_reader_inst = server_stream.reader(io, &server_read_buffer);
+    const server_reader = &stream_reader_inst.interface;
+    const client_input_size = try server_reader.readVec(&server_client_response_buffer);
 
-    var server_inst = try IpAddress.listen(&server_address, io, .{});
+    var stream_writer_inst = server_stream.writer(io, &server_write_buffer);
+    const server_writer = &stream_writer_inst.interface;
+
+    if (client_input_size > 0) {
+        try server_writer.print("{s}", .{server_read_buffer[0..client_input_size]});
+        try server_writer.flush();
+    }
+}
+
+fn server(io: std.Io) !void {
+    const server_port: u14 = 8070;
+    const server_address = "127.0.0.1";
+
+    const IpAddress = std.Io.net.IpAddress;
+    const server_address_parsed = try IpAddress.parse(server_address, server_port);
+
+    var server_inst = try IpAddress.listen(&server_address_parsed, io, .{});
     defer server_inst.deinit(io);
 
     while (true) {
         const server_stream = try server_inst.accept(io);
-        defer server_stream.close(io);
-
-        var stream_reader_inst = server_stream.reader(io, &server_read_buffer);
-        const server_reader = &stream_reader_inst.interface;
-        const client_input = try server_reader.readVec(&server_client_response_buffer);
-
-        var stream_writer_inst = server_stream.writer(io, &server_write_buffer);
-        const server_writer = &stream_writer_inst.interface;
-
-        if (client_input > 0) {
-            std.debug.print("WE GOT X BYTES FROM THE CLIENT BOIS {d}", .{client_input});
-            try server_writer.print("{any}", .{server_client_response_buffer});
-            std.debug.print("ABOUT TO FLUSH BOIS", .{});
-            try server_writer.flush();
-        }
+        try handleAcceptedConnections(server_stream, io);
     }
 }
