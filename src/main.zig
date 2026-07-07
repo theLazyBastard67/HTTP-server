@@ -7,10 +7,10 @@ pub fn main(init: std.process.Init) !void {
     var stdout_inst = std.Io.File.stdout().writer(init.io, &stdout_buffer);
     var stdout_printer = &stdout_inst.interface;
 
-    try stdout_printer.print("A simple TCP server written in Zig {d}.{d}.{d}\n\n", .{ builtins.zig_version.major, builtins.zig_version.minor, builtins.zig_version.patch });
+    try stdout_printer.print("A simple TCP server written in Zig {d}.{d}.{d}.\n\n", .{ builtins.zig_version.major, builtins.zig_version.minor, builtins.zig_version.patch });
     try stdout_inst.flush();
 
-    try server(init.io);
+    try server(init.io, stdout_printer);
 }
 
 fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io) !void {
@@ -37,7 +37,7 @@ fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io) !void
     }
 }
 
-fn server(io: std.Io) !void {
+fn server(io: std.Io, stdout_writer_interface: *std.Io.Writer) !void {
     const server_address = "127.0.0.1";
     const server_port = 8080;
 
@@ -47,8 +47,11 @@ fn server(io: std.Io) !void {
     var server_inst = try IpAddress.listen(&server_address_parsed, io, .{});
     defer server_inst.deinit(io);
 
+    try stdout_writer_interface.print("The server started listening on {s}:{d}. \n\n", .{ server_address, server_port });
+    try stdout_writer_interface.flush();
+
     while (true) {
         const server_stream = try server_inst.accept(io);
-        try handleAcceptedConnections(server_stream, io);
+        _ = try std.Thread.spawn(.{}, handleAcceptedConnections, .{ server_stream, io });
     }
 }
