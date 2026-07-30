@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtins = @import("builtin");
 const formatting = @import("formatting.zig");
+const parser = @import("httpParser.zig");
 
 pub fn main(init: std.process.Init) !void {
     var stdout_buffer: [4096]u8 = undefined;
@@ -40,44 +41,6 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-const httpRequestParsedStruct = struct { method: []const u8 = "", filePath: []const u8 = "", httpVersion: []const u8 = "", host: []const u8 = "", userAgent: []const u8 = "", accept: []const u8 = "", connection: []const u8 = "", content_length: usize = 0, request_body: []const u8 = "" };
-
-pub fn parseHttpRequestHeader(inputBuffer: []u8) !httpRequestParsedStruct {
-    const trim = std.mem.trim;
-
-    var colon: usize = undefined;
-    var fieldName: []const u8 = undefined;
-    var fieldValue: []const u8 = undefined;
-    var parseResult: httpRequestParsedStruct = .{};
-
-    var tokenizer = std.mem.tokenizeAny(u8, inputBuffer, "\r\n");
-
-    if (tokenizer.next()) |request_line| {
-        var tokenizeRequestLine = std.mem.tokenizeScalar(u8, request_line, ' ');
-
-        parseResult.method = tokenizeRequestLine.next() orelse return error.InvalidRequest;
-        parseResult.filePath = tokenizeRequestLine.next() orelse return error.InvalidRequest;
-        parseResult.httpVersion = tokenizeRequestLine.next() orelse return error.InvalidRequest;
-    } else return error.InvalidRequest;
-
-    while (tokenizer.next()) |next_header_token| {
-        const trimmedTokenValue = trim(u8, next_header_token, " ");
-
-        colon = std.mem.find(u8, trimmedTokenValue, ":") orelse return error.InvalidRequest;
-
-        fieldName = trim(u8, trimmedTokenValue[0..colon], " ");
-        fieldValue = trim(u8, trimmedTokenValue[colon + 1 .. trimmedTokenValue.len], " ");
-
-        if (std.mem.eql(u8, fieldName, "Host")) {
-            parseResult.host = fieldValue;
-        }
-        if (std.mem.eql(u8, fieldName, "Content-Length")) {
-            parseResult.content_length = try std.fmt.parseInt(usize, fieldValue, 10);
-        }
-    }
-    return parseResult;
-}
-
 fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io, stdout_writer_interface: *std.Io.Writer) !void {
     defer server_stream.close(io);
 
@@ -90,7 +53,7 @@ fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io, stdou
     var stream_reader_inst = server_stream.reader(io, &server_read_buffer);
     const server_reader = &stream_reader_inst.interface;
 
-    var parseResult: httpRequestParsedStruct = undefined;
+    var parseResult: parser.httpRequestParsedStruct = .{};
 
     while (true) {
         var read_data_slice = server_reader.buffered();
@@ -98,7 +61,7 @@ fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io, stdou
         while (std.mem.containsAtLeast(u8, read_data_slice, 1, "\r\n\r\n")) {
             const request_body_start = std.mem.find(u8, read_data_slice, "\r\n\r\n").? + 4;
 
-            parseResult = parseHttpRequestHeader(read_data_slice[0 .. request_body_start - 4]) catch |err| {
+            parseResult.parseHttpRequestHeader(read_data_slice[0 .. request_body_start - 4]) catch |err| {
                 try stdout_writer_interface.print("{s}\n{any}\n{s}", .{ formatting.Color.bold_bright_red, err, formatting.Color
                     .reset });
                 try stdout_writer_interface.flush();
@@ -149,175 +112,4 @@ fn server(io: std.Io, stdout_writer_interface: *std.Io.Writer, server_port: u16,
         const thread = try std.Thread.spawn(.{}, handleAcceptedConnections, .{ server_stream, io, stdout_writer_interface });
         thread.detach();
     }
-}
-
-// Tests.
-
-test "parse basic GET request" {
-    const request =
-        "GET / HTTP/1.1\r\n" ++
-        "Host: localhost\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("GET", result.method);
-    try std.testing.expectEqualStrings("/", result.filePath);
-    try std.testing.expectEqualStrings("HTTP/1.1", result.httpVersion);
-    try std.testing.expectEqualStrings("localhost", result.host);
-    try std.testing.expectEqual(@as(usize, 0), result.content_length);
-}
-
-test "parse GET with nested path" {
-    const request =
-        "GET /a/b/c/index.html HTTP/1.1\r\n" ++
-        "Host: localhost\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("GET", result.method);
-    try std.testing.expectEqualStrings("/a/b/c/index.html", result.filePath);
-}
-
-test "parse GET with query string" {
-    const request =
-        "GET /search?q=zig HTTP/1.1\r\n" ++
-        "Host: localhost\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("/search?q=zig", result.filePath);
-}
-
-test "parse POST request" {
-    const request =
-        "POST /login HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "Content-Length: 5\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("POST", result.method);
-    try std.testing.expectEqualStrings("/login", result.filePath);
-    try std.testing.expectEqual(@as(usize, 5), result.content_length);
-}
-
-test "parse POST with zero content length" {
-    const request =
-        "POST / HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "Content-Length: 0\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqual(@as(usize, 0), result.content_length);
-}
-
-test "ignore unknown headers" {
-    const request =
-        "GET / HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "X-Test: abc\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("localhost", result.host);
-}
-
-test "trim whitespace around header name and value" {
-    const request =
-        "GET / HTTP/1.1\r\n" ++
-        "Host    :    localhost    \r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("localhost", result.host);
-}
-
-test "parse multiple known headers" {
-    const request =
-        "GET / HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "Content-Length: 123\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("localhost", result.host);
-    try std.testing.expectEqual(@as(usize, 123), result.content_length);
-}
-
-test "empty request returns InvalidRequest" {
-    var request: [0]u8 = .{};
-
-    try std.testing.expectError(
-        error.InvalidRequest,
-        parseHttpRequestHeader(&request),
-    );
-}
-
-test "missing HTTP version returns InvalidRequest" {
-    const request =
-        "GET /\r\n" ++
-        "Host: localhost\r\n\r\n";
-
-    try std.testing.expectError(
-        error.InvalidRequest,
-        parseHttpRequestHeader(@constCast(request)),
-    );
-}
-
-test "missing path returns InvalidRequest" {
-    const request =
-        "GET  HTTP/1.1\r\n" ++
-        "Host: localhost\r\n\r\n";
-
-    try std.testing.expectError(
-        error.InvalidRequest,
-        parseHttpRequestHeader(@constCast(request)),
-    );
-}
-
-test "header without colon returns InvalidRequest" {
-    const request =
-        "GET / HTTP/1.1\r\n" ++
-        "Host localhost\r\n\r\n";
-
-    try std.testing.expectError(
-        error.InvalidRequest,
-        parseHttpRequestHeader(@constCast(request)),
-    );
-}
-
-test "invalid content length returns error" {
-    const request =
-        "POST / HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "Content-Length: abc\r\n\r\n";
-
-    try std.testing.expectError(
-        error.InvalidCharacter,
-        parseHttpRequestHeader(@constCast(request)),
-    );
-}
-
-test "request with no Host header is accepted" {
-    const request =
-        "GET / HTTP/1.1\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    try std.testing.expectEqualStrings("GET", result.method);
-    try std.testing.expectEqualStrings("/", result.filePath);
-    try std.testing.expectEqualStrings("", result.host);
-}
-
-test "duplicate Host header uses last value" {
-    const request =
-        "GET / HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "Host: example.com\r\n\r\n";
-
-    const result = try parseHttpRequestHeader(@constCast(request));
-
-    // Current parser overwrites previous values.
-    try std.testing.expectEqualStrings("example.com", result.host);
 }
