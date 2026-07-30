@@ -89,54 +89,48 @@ fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io, stdou
 
     var stream_reader_inst = server_stream.reader(io, &server_read_buffer);
     const server_reader = &stream_reader_inst.interface;
-    var client_input_size: usize = 0;
 
     var parseResult: httpRequestParsedStruct = undefined;
-    var server_client_response_buffer: [1][]u8 = .{server_read_buffer[client_input_size..]};
 
     while (true) {
-        server_client_response_buffer = .{server_read_buffer[client_input_size..]};
-        client_input_size += server_reader.readVec(&server_client_response_buffer) catch {
-            break;
-        };
+        var read_data_slice = server_reader.buffered();
 
-        while (std.mem.containsAtLeast(u8, server_read_buffer[0..client_input_size], 1, "\r\n\r\n")) {
-            const request_body_start = std.mem.find(u8, server_read_buffer[0..client_input_size], "\r\n\r\n").? + 4;
-            parseResult = parseHttpRequestHeader(server_read_buffer[0 .. request_body_start - 4]) catch |err| {
+        while (std.mem.containsAtLeast(u8, read_data_slice, 1, "\r\n\r\n")) {
+            const request_body_start = std.mem.find(u8, read_data_slice, "\r\n\r\n").? + 4;
+
+            parseResult = parseHttpRequestHeader(read_data_slice[0 .. request_body_start - 4]) catch |err| {
                 try stdout_writer_interface.print("{s}\n{any}\n{s}", .{ formatting.Color.bold_bright_red, err, formatting.Color
                     .reset });
                 try stdout_writer_interface.flush();
                 break;
             };
+
             if (std.mem.eql(u8, parseResult.method, "POST")) {
-                var body_recieved = client_input_size - request_body_start;
-                while (body_recieved < parseResult.content_length) {
-                    server_client_response_buffer = .{server_read_buffer[client_input_size..]};
-                    const num_of_bytes_recieved = server_reader.readVec(&server_client_response_buffer) catch {
-                        break;
-                    };
-                    body_recieved += num_of_bytes_recieved;
-                    client_input_size += num_of_bytes_recieved;
+                const body_recieved = read_data_slice.len - request_body_start;
+
+                if (body_recieved < parseResult.content_length) {
+                    server_reader.fill(request_body_start + parseResult.content_length) catch break;
+                    read_data_slice = server_reader.buffered();
                 }
-                parseResult.request_body = server_read_buffer[request_body_start .. request_body_start + parseResult.content_length];
+                parseResult.request_body = read_data_slice[request_body_start .. request_body_start + parseResult.content_length];
             }
+
             std.debug.print("{s} \n", .{parseResult.method});
             std.debug.print("{s} \n", .{parseResult.filePath});
             std.debug.print("{s} \n", .{parseResult.httpVersion});
             std.debug.print("{s} \n", .{parseResult.host});
             std.debug.print("{s} \n", .{parseResult.request_body});
 
-            try server_writer.print("{s}", .{server_read_buffer[0..client_input_size]});
+            try server_writer.print("{s}", .{read_data_slice});
             try server_writer.flush();
 
-            const request_body_end = request_body_start + parseResult.content_length;
+            // const request_body_end = request_body_start + parseResult.content_length;
 
-            if (request_body_end != client_input_size) {
-                std.mem.copyForwards(u8, server_read_buffer[0..], server_read_buffer[request_body_end..client_input_size]);
-            }
-
-            client_input_size = client_input_size - request_body_end;
+            server_reader.toss(request_body_start + parseResult.content_length);
+            read_data_slice = server_reader.buffered();
         }
+
+        server_reader.fillMore() catch break;
     }
 }
 
