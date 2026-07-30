@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtins = @import("builtin");
+const formatting = @import("formatting.zig");
 
 pub fn main(init: std.process.Init) !void {
     var stdout_buffer: [4096]u8 = undefined;
@@ -32,7 +33,7 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, "localhost", checked_address)) {
             try server(init.io, stdout_printer, port_number, "127.0.0.1");
         } else if (checked_address.len == 0) {
-            try stdout_printer.print("No address read from stdin, defaulting to localhost. \n", .{});
+            try stdout_printer.print("{s}No address read from stdin, defaulting to localhost.{s}\n", .{ formatting.Color.bold_bright_yellow, formatting.Color.reset });
             try stdout_inst.flush();
             try server(init.io, stdout_printer, port_number, "127.0.0.1");
         } else try server(init.io, stdout_printer, port_number, checked_address);
@@ -61,7 +62,6 @@ pub fn parseHttpRequestHeader(inputBuffer: []u8) !httpRequestParsedStruct {
 
     while (tokenizer.next()) |next_header_token| {
         const trimmedTokenValue = trim(u8, next_header_token, " ");
-        std.debug.print("TOKEN: '{s}'\n", .{next_header_token});
 
         colon = std.mem.find(u8, trimmedTokenValue, ":") orelse return error.InvalidRequest;
 
@@ -100,12 +100,13 @@ fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io, stdou
             break;
         };
 
-        if (std.mem.containsAtLeast(u8, server_read_buffer[0..client_input_size], 1, "\r\n\r\n")) {
+        while (std.mem.containsAtLeast(u8, server_read_buffer[0..client_input_size], 1, "\r\n\r\n")) {
             const request_body_start = std.mem.find(u8, server_read_buffer[0..client_input_size], "\r\n\r\n").? + 4;
             parseResult = parseHttpRequestHeader(server_read_buffer[0 .. request_body_start - 4]) catch |err| {
-                try stdout_writer_interface.print("\ndfhdhfhdf{any}\n", .{err});
+                try stdout_writer_interface.print("{s}\n{any}\n{s}", .{ formatting.Color.bold_bright_red, err, formatting.Color
+                    .reset });
                 try stdout_writer_interface.flush();
-                continue;
+                break;
             };
             if (std.mem.eql(u8, parseResult.method, "POST")) {
                 var body_recieved = client_input_size - request_body_start;
@@ -146,7 +147,7 @@ fn server(io: std.Io, stdout_writer_interface: *std.Io.Writer, server_port: u16,
     var server_inst = try IpAddress.listen(&server_address_parsed, io, .{});
     defer server_inst.deinit(io);
 
-    try stdout_writer_interface.print("\n\nThe server started listening on {s}:{d}. \n\n", .{ server_address, server_port });
+    try stdout_writer_interface.print("{s}\n\nThe server started listening on {s}:{d}.{s}\n\n", .{ formatting.Color.bold_bright_green, server_address, server_port, formatting.Color.reset });
     try stdout_writer_interface.flush();
 
     while (true) {
