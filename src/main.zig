@@ -30,6 +30,7 @@ pub fn main(init: std.process.Init) !void {
 
     const address: ?[]u8 = try stdin_reader.takeDelimiterExclusive('\n');
     stdin_reader.toss(1);
+
     if (address) |checked_address| {
         if (std.mem.eql(u8, "localhost", checked_address)) {
             try server(init.io, stdout_printer, port_number, "127.0.0.1");
