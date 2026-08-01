@@ -125,6 +125,26 @@ const ResponseHandler = struct {
     connection: []const u8 = "",
     body: []const u8 = "",
 
+    pub fn getMimeType(filePath: []const u8) []const u8 {
+        const extension = std.fs.path.extension(filePath);
+
+        if (std.mem.eql(u8, extension, ".txt")) return "text/plain";
+        if (std.mem.eql(u8, extension, ".html")) return "text/html";
+        if (std.mem.eql(u8, extension, ".css")) return "text/css";
+        if (std.mem.eql(u8, extension, ".js")) return "application/javascript";
+        if (std.mem.eql(u8, extension, ".json")) return "application/json";
+        if (std.mem.eql(u8, extension, ".md")) return "text/markdown";
+        if (std.mem.eql(u8, extension, ".jpg") or std.mem.eql(u8, extension, ".jpeg")) return "image/jpeg";
+        if (std.mem.eql(u8, extension, ".png")) return "image/png";
+        if (std.mem.eql(u8, extension, ".gif")) return "image/gif";
+        if (std.mem.eql(u8, extension, ".svg")) return "image/svg+xml";
+        if (std.mem.eql(u8, extension, ".webp")) return "image/webp";
+        if (std.mem.eql(u8, extension, ".ico")) return "image/x-icon";
+        if (std.mem.eql(u8, extension, ".pdf")) return "application/pdf";
+
+        return "application/octet-stream";
+    }
+
     pub fn init(s: *ResponseHandler, status_code: u16, reason_phrase: []const u8, content_type: []const u8, connection: []const u8, body: []const u8) void {
         s.status_code = status_code;
         s.reason_phrase = reason_phrase;
@@ -144,8 +164,8 @@ const ResponseHandler = struct {
                 std.debug.print("File not found for: {s}", .{parsedStruct.filePath});
                 s.status_code = 404;
                 s.reason_phrase = "Not Found";
-                s.content_type = "image/jpg";
-                s.connection = s.connection;
+                s.content_type = getMimeType(parsedStruct.filePath[1..]);
+                s.connection = "close";
 
                 try s.serializeAndPrint(server_writer, 13);
                 return err;
@@ -160,8 +180,8 @@ const ResponseHandler = struct {
 
             s.status_code = 200;
             s.reason_phrase = "OK";
-            s.content_type = "image/jpg";
-            s.connection = s.connection;
+            s.content_type = getMimeType(parsedStruct.filePath[1..]);
+            s.connection = parsedStruct.connection;
 
             try s.serializeAndPrint(server_writer, try responseFile.length(io));
 

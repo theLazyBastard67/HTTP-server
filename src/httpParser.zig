@@ -42,6 +42,9 @@ pub const httpRequestParsedStruct = struct {
             if (std.mem.eql(u8, fieldName, "Content-Length")) {
                 s.content_length = try std.fmt.parseInt(usize, fieldValue, 10);
             }
+            if (std.mem.eql(u8, fieldName, "Connection")) {
+                s.connection = fieldValue;
+            }
         }
     }
 };
