@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     var port_number: u16 = undefined;
 
     if (raw_port_number) |checked_port_number| {
-        port_number = try std.fmt.parseInt(u16, checked_port_number, 10);
+        port_number = try std.fmt.parseInt(u16, std.mem.trim(u8, checked_port_number, " "), 10);
     }
 
     try stdout_printer.print("Enter the address: ", .{});
@@ -55,46 +55,49 @@ fn handleAcceptedConnections(server_stream: std.Io.net.Stream, io: std.Io, stdou
     const server_reader = &stream_reader_inst.interface;
 
     var parseResult: parser.httpRequestParsedStruct = .{};
+    var responseHandler: ResponseHandler = .{};
 
     while (true) {
         var read_data_slice = server_reader.buffered();
 
         while (std.mem.containsAtLeast(u8, read_data_slice, 1, "\r\n\r\n")) {
+            parseResult = .{};
             const request_body_start = std.mem.find(u8, read_data_slice, "\r\n\r\n").? + 4;
 
             parseResult.parseHttpRequestHeader(read_data_slice[0 .. request_body_start - 4]) catch |err| {
-                try stdout_writer_interface.print("{s}\n{any}\n{s}", .{ formatting.Color.bold_bright_red, err, formatting.Color
+                try stdout_writer_interface.print("{s}\n{any}\n\nMalformed request, closing connection.\n{s}", .{ formatting.Color.bold_bright_red, err, formatting.Color
                     .reset });
                 try stdout_writer_interface.flush();
-                break;
+
+                responseHandler.init(400, "Bad Request", "text/plain", "close", "");
+
+                return;
             };
 
             if (std.mem.eql(u8, parseResult.method, "POST")) {
                 const body_recieved = read_data_slice.len - request_body_start;
 
                 if (body_recieved < parseResult.content_length) {
-                    server_reader.fill(request_body_start + parseResult.content_length) catch break;
+                    server_reader.fill(request_body_start + parseResult.content_length) catch return;
                     read_data_slice = server_reader.buffered();
                 }
                 parseResult.request_body = read_data_slice[request_body_start .. request_body_start + parseResult.content_length];
             }
 
-            std.debug.print("{s} \n", .{parseResult.method});
-            std.debug.print("{s} \n", .{parseResult.filePath});
-            std.debug.print("{s} \n", .{parseResult.httpVersion});
-            std.debug.print("{s} \n", .{parseResult.host});
-            std.debug.print("{s} \n", .{parseResult.request_body});
-
-            try server_writer.print("{s}", .{read_data_slice});
-            try server_writer.flush();
-
+            responseHandler.respond(parseResult, io, server_writer) catch |err|
+                {
+                    try stdout_writer_interface.print("{s}\n{any}\n{s}", .{ formatting.Color.bold_bright_red, err, formatting.Color
+                        .reset });
+                    try stdout_writer_interface.flush();
+                };
+            if (std.mem.eql(u8, parseResult.connection, "close")) return;
             // const request_body_end = request_body_start + parseResult.content_length;
 
             server_reader.toss(request_body_start + parseResult.content_length);
             read_data_slice = server_reader.buffered();
         }
 
-        server_reader.fillMore() catch break;
+        server_reader.fillMore() catch return;
     }
 }
 
@@ -114,3 +117,56 @@ fn server(io: std.Io, stdout_writer_interface: *std.Io.Writer, server_port: u16,
         thread.detach();
     }
 }
+
+const ResponseHandler = struct {
+    status_code: u16 = 0,
+    reason_phrase: []const u8 = "",
+    content_type: []const u8 = "",
+    connection: []const u8 = "",
+    body: []const u8 = "",
+
+    pub fn init(s: *ResponseHandler, status_code: u16, reason_phrase: []const u8, content_type: []const u8, connection: []const u8, body: []const u8) void {
+        s.status_code = status_code;
+        s.reason_phrase = reason_phrase;
+        s.content_type = content_type;
+        s.connection = connection;
+        s.body = body;
+    }
+
+    pub fn serializeAndPrint(s: *ResponseHandler, server_writer: *std.Io.Writer, fileLength: u64) !void {
+        try server_writer.print("HTTP/1.1 {d} {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: {s}\r\n\r\n{s}", .{ s.status_code, s.reason_phrase, s.content_type, fileLength, s.connection, s.body });
+        try server_writer.flush();
+    }
+
+    pub fn respond(s: *ResponseHandler, parsedStruct: parser.httpRequestParsedStruct, io: std.Io, server_writer: *std.Io.Writer) !void {
+        if (std.mem.eql(u8, parsedStruct.method, "GET") or std.mem.eql(u8, parsedStruct.method, "POST")) {
+            const responseFile = std.Io.Dir.cwd().openFile(io, parsedStruct.filePath[1..], .{}) catch |err| {
+                std.debug.print("File not found for: {s}", .{parsedStruct.filePath});
+                s.status_code = 404;
+                s.reason_phrase = "Not Found";
+                s.content_type = "image/jpg";
+                s.connection = s.connection;
+
+                try s.serializeAndPrint(server_writer, 13);
+                return err;
+            };
+            defer responseFile.close(io);
+
+            const fileBuffer = try std.heap.smp_allocator.alloc(u8, try responseFile.length(io));
+            defer std.heap.smp_allocator.free(fileBuffer);
+
+            var file_reader_inst = responseFile.reader(io, fileBuffer);
+            const file_reader = &file_reader_inst.interface;
+
+            s.status_code = 200;
+            s.reason_phrase = "OK";
+            s.content_type = "image/jpg";
+            s.connection = s.connection;
+
+            try s.serializeAndPrint(server_writer, try responseFile.length(io));
+
+            _ = try file_reader.streamRemaining(server_writer);
+            try server_writer.flush();
+        } else return error.InvalidMethod;
+    }
+};
